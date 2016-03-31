@@ -28,10 +28,10 @@ defmodule Honeydew.Worker do
 
     case init_result do
       {:ok, state} ->
-        work_queue = Honeydew.work_queue_name(worker_module, pool_name)
-        GenServer.call(work_queue, :monitor_me)
+        dispatcher = Honeydew.dispatcher_name(worker_module, pool_name)
+        GenServer.call(dispatcher, :monitor_me)
         GenServer.cast(self, :ask_for_job)
-        {:ok, {work_queue, worker_module, state}}
+        {:ok, {dispatcher, worker_module, state}}
       error ->
         worker_supervisor = Honeydew.worker_supervisor_name(worker_module, pool_name)
         :timer.apply_after(retry_secs * 1000, Supervisor, :start_child, [worker_supervisor, []])
@@ -41,8 +41,8 @@ defmodule Honeydew.Worker do
   end
 
 
-  def handle_cast(:ask_for_job, {work_queue, worker_module, worker_state} = state) do
-    job = GenServer.call(work_queue, :job_please, :infinity)
+  def handle_cast(:ask_for_job, {dispatcher, worker_module, worker_state} = state) do
+    job = GenServer.call(dispatcher, :job_please, :infinity)
     result = case job.task do
                f when is_function(f) -> f.(worker_state)
                f when is_atom(f)     -> apply(worker_module, f, [worker_state])

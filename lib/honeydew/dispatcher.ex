@@ -1,22 +1,22 @@
-defmodule Honeydew.WorkQueue do
+defmodule Honeydew.Dispatcher do
   use GenServer
   require Logger
   alias Honeydew.Job
 
-  # after max_failures, delay the job by delay_secs
   defmodule State do
-    defstruct max_failures: nil,
-              delay_secs: nil,
-              suspended: false,
-              queue: :queue.new, # jobs waiting to be taken by a worker
-              backlog: MapSet.new, # jobs that have failed max_failures number of times, and are waiting to be re-queued after delay_secs
+    defstruct queue: nil,
+              queue_module: Honeydew.Queue.ErlangQueue,
               waiting: :queue.new, # workers that are waiting for a job
-              working: Map.new # workers that are currently working mapped to their current jobs
+              working: Map.new, # workers that are currently working mapped to their current jobs
+              suspended: false
   end
 
 
-  def start_link(name, max_failures, delay_secs) do
-    GenServer.start_link(__MODULE__, %State{max_failures: max_failures, delay_secs: delay_secs}, name: name)
+  def start_link(name) do
+    # FIXME: allow passing of queue_module
+    state = %State{}
+    {:ok, queue} = state.queue_module.init(name)
+    GenServer.start_link(__MODULE__, %{state | queue: queue}, name: name)
   end
 
   #
@@ -45,12 +45,12 @@ defmodule Honeydew.WorkQueue do
   end
 
   def handle_call(:job_please, {worker, _msg_ref} = from, state) do
-    case :queue.out(state.queue) do
+    case state.queue_module.pop(state.queue) do
       # there's a job in the queue, honey do it, please!
-      {{:value, job}, queue} ->
+      {:ok, job, queue} ->
         {:reply, job, %{state | queue: queue, working: Map.put(state.working, worker, job)}}
       # nothing for the worker to do right now, we'll get back to them later when something arrives
-      {:empty, _} ->
+      :empty ->
         {:noreply, queue_worker(from, state)}
     end
   end
@@ -73,11 +73,11 @@ defmodule Honeydew.WorkQueue do
   end
 
   def handle_call(:status, _from, state) do
-    %State{queue: queue, backlog: backlog, working: working, waiting: waiting, suspended: suspended} = state
+    %State{queue: queue, working: working, waiting: waiting, suspended: suspended} = state
 
     status = %{
       queue: :queue.len(queue),
-      backlog: Set.size(backlog),
+      # backlog: Set.size(backlog),
       working: Map.size(working),
       waiting: :queue.len(waiting),
       suspended: suspended
@@ -97,12 +97,12 @@ defmodule Honeydew.WorkQueue do
       {job, working} ->
         state = %{state | working: working}
         job = %{job | failures: job.failures + 1}
-        state = if job.failures < state.max_failures do
-                  queue_job(job, state)
-                else
-                  # Logger.warn "[Honeydew] #{state.worker_module} Job failed too many times, delaying #{state.delay_secs}s: #{inspect job}"
-                  delay_job(job, state)
-                end
+        # state = if job.failures < state.max_failures do
+        #           queue_job(job, state)
+        #         else
+        #           # Logger.warn "[Honeydew] #{state.worker_module} Job failed too many times, delaying #{state.delay_secs}s: #{inspect job}"
+        #           delay_job(job, state)
+        #         end
     end
     {:noreply, state}
   end
@@ -110,21 +110,23 @@ defmodule Honeydew.WorkQueue do
   # delay_secs has elapsed and a failing job is ready to be tried again
   def handle_info({:enqueue_delayed_job, job}, state) do
     Logger.info "[Honeydew] [#{__MODULE__}] Enqueuing delayed job: #{inspect job}"
-    state = %{state | backlog: Set.delete(state.backlog, job)}
+    # state = %{state | backlog: Set.delete(state.backlog, job)}
     {:noreply, queue_job(job, state)}
   end
   def handle_info(_msg, state), do: {:noreply, state}
 
 
   defp queue_job(job, %{suspended: true} = state) do
-    %{state | queue: :queue.in(job, state.queue)}
+    {:ok, queue} = state.queue_module.push(state.queue, job)
+    %{state | queue: queue}
   end
 
   defp queue_job(job, state) do
     case next_alive_worker(state.waiting) do
       # no workers are waiting, add the job to the queue
       {nil, waiting} ->
-        %{state | queue: :queue.in(job, state.queue), waiting: waiting}
+        {:ok, queue} = state.queue_module.push(state.queue, job)
+        %{state | queue: queue, waiting: waiting}
       # there's a worker waiting, give them the job
       {from_worker, waiting} ->
         {worker, _msg_ref} = from_worker
@@ -136,8 +138,8 @@ defmodule Honeydew.WorkQueue do
   defp delay_job(job, state) do
     # random ids are needed so the backlog Set sees all jobs as unique
     job = %{job | id: :erlang.unique_integer}
-    :erlang.send_after(state.delay_secs * 1000, self, {:enqueue_delayed_job, job})
-    %{state | backlog: Set.put(state.backlog, job)}
+    # :erlang.send_after(state.delay_secs * 1000, self, {:enqueue_delayed_job, job})
+    state # %{state | backlog: Set.put(state.backlog, job)}
   end
 
   defp queue_worker({worker, _msg_ref} = from, state) do

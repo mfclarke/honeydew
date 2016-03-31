@@ -19,8 +19,8 @@ defmodule Honeydew do
 
 
   @doc false
-  def work_queue_name(worker_module, pool_name) do
-    Module.concat([Honeydew, WorkQueue, worker_module, pool_name])
+  def dispatcher_name(worker_module, pool_name) do
+    Module.concat([Honeydew, Dispatcher, worker_module, pool_name])
   end
 
   @doc false
@@ -42,7 +42,7 @@ defmodule Honeydew do
       """
       def cast(pool_name, task) do
         __MODULE__
-        |> Honeydew.work_queue_name(pool_name)
+        |> Honeydew.dispatcher_name(pool_name)
         |> GenServer.cast({:add_task, task})
       end
 
@@ -53,7 +53,7 @@ defmodule Honeydew do
       """
       def call(pool_name, task, timeout \\ 5000) do
         __MODULE__
-        |> Honeydew.work_queue_name(pool_name)
+        |> Honeydew.dispatcher_name(pool_name)
         |> GenServer.call({:add_task, task}, timeout)
       end
 
@@ -62,19 +62,19 @@ defmodule Honeydew do
       """
       def status(pool_name) do
         __MODULE__
-        |> Honeydew.work_queue_name(pool_name)
+        |> Honeydew.dispatcher_name(pool_name)
         |> GenServer.call(:status)
       end
 
       def suspend(pool_name)  do
         __MODULE__
-        |> Honeydew.work_queue_name(pool_name)
+        |> Honeydew.dispatcher_name(pool_name)
         |> GenServer.call(:suspend)
       end
 
       def resume(pool_name) do
         __MODULE__
-        |> Honeydew.work_queue_name(pool_name)
+        |> Honeydew.dispatcher_name(pool_name)
         |> GenServer.call(:resume)
       end
     end

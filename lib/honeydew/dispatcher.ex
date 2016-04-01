@@ -1,22 +1,26 @@
 defmodule Honeydew.Dispatcher do
   use GenServer
-  require Logger
   alias Honeydew.Job
 
   defmodule State do
     defstruct queue: nil,
-              queue_module: Honeydew.Queue.ErlangQueue,
+              queue_module: nil,
+              failure: nil,
+              failure_module: nil,
               waiting: :queue.new, # workers that are waiting for a job
               working: Map.new, # workers that are currently working mapped to their current jobs
               suspended: false
   end
 
 
-  def start_link(name) do
-    # FIXME: allow passing of queue_module
-    state = %State{}
-    {:ok, queue} = state.queue_module.init(name)
-    GenServer.start_link(__MODULE__, %{state | queue: queue}, name: name)
+  def start_link(name, queue_module, queue_args, failure_module, failure_args) do
+    state = %State{queue_module: queue_module,
+                   failure_module: failure_module}
+
+    {:ok, queue} = state.queue_module.init(name, queue_args)
+    {:ok, failure} = state.failure_module.init(name, failure_args)
+
+    GenServer.start_link(__MODULE__, %{state | queue: queue, failure: failure}, name: name)
   end
 
   #
@@ -73,11 +77,10 @@ defmodule Honeydew.Dispatcher do
   end
 
   def handle_call(:status, _from, state) do
-    %State{queue: queue, working: working, waiting: waiting, suspended: suspended} = state
+    %State{queue: queue, queue_module: queue_module, working: working, waiting: waiting, suspended: suspended} = state
 
     status = %{
-      queue: :queue.len(queue),
-      # backlog: Set.size(backlog),
+      queue: queue_module.length(queue),
       working: Map.size(working),
       waiting: :queue.len(waiting),
       suspended: suspended
@@ -89,30 +92,18 @@ defmodule Honeydew.Dispatcher do
   def handle_call(_msg, _from, state), do: {:reply, :ok, state}
 
 
-  # A worker has died, put its job back on the queue and increment the job's "failures" count
+  # A worker died
   def handle_info({:DOWN, _ref, _type, worker_pid, _reason}, state) do
     case Map.pop(state.working, worker_pid) do
       # worker wasn't working on anything
       {nil, _working} -> nil
       {job, working} ->
-        state = %{state | working: working}
-        job = %{job | failures: job.failures + 1}
-        # state = if job.failures < state.max_failures do
-        #           queue_job(job, state)
-        #         else
-        #           # Logger.warn "[Honeydew] #{state.worker_module} Job failed too many times, delaying #{state.delay_secs}s: #{inspect job}"
-        #           delay_job(job, state)
-        #         end
+        {:ok, failure} = state.failure_module.job_failed(state.failure, job)
+        state = %{state | working: working, failure: failure}
     end
     {:noreply, state}
   end
 
-  # delay_secs has elapsed and a failing job is ready to be tried again
-  def handle_info({:enqueue_delayed_job, job}, state) do
-    Logger.info "[Honeydew] [#{__MODULE__}] Enqueuing delayed job: #{inspect job}"
-    # state = %{state | backlog: Set.delete(state.backlog, job)}
-    {:noreply, queue_job(job, state)}
-  end
   def handle_info(_msg, state), do: {:noreply, state}
 
 
@@ -133,13 +124,6 @@ defmodule Honeydew.Dispatcher do
         GenServer.reply(from_worker, job)
         %{state | waiting: waiting, working: Map.put(state.working, worker, job)}
     end
-  end
-
-  defp delay_job(job, state) do
-    # random ids are needed so the backlog Set sees all jobs as unique
-    job = %{job | id: :erlang.unique_integer}
-    # :erlang.send_after(state.delay_secs * 1000, self, {:enqueue_delayed_job, job})
-    state # %{state | backlog: Set.put(state.backlog, job)}
   end
 
   defp queue_worker({worker, _msg_ref} = from, state) do

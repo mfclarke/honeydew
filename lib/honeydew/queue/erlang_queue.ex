@@ -1,7 +1,7 @@
 defmodule Honeydew.Queue.ErlangQueue do
   @behaviour Honeydew.Queue
 
-  def init(_name) do
+  def init(_name, _args) do
     {:ok, :queue.new}
   end
 
@@ -14,5 +14,9 @@ defmodule Honeydew.Queue.ErlangQueue do
       {{:value, job}, queue} -> {:ok, job, queue}
       {:empty, _} -> :empty
     end
+  end
+
+  def length(queue) do
+    :queue.len(queue)
   end
 end

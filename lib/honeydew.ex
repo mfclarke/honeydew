@@ -4,17 +4,20 @@ defmodule Honeydew do
 
         `pool_name` is how you'll refer to the queue to add a task.
         `worker_module` is the module that the workers in your queue will run.
-        `worker_opts` are arguments handed to your module's `init/1`
+        `worker_args` are arguments handed to your module's `init/1`
 
         You can provide any of the following `pool_opts`:
           - `workers`: the number of workers in the pool
-          - `max_failures`: the maximum number of times a job is allowed to fail before it's abandoned
           - `init_retry_secs`: the amount of time, in seconds, to wait before respawning a worker who's `init/1` function failed
+          - `queue`: a module that implements a work queue, defaults to a simple in-memory FIFO queue
+          - `queue_args`: arguents passed to the queue's `init/1`
+          - `failure`: a module that handles what happens when a job fails, abandons failed jobs by default.
+          - `failure_args`: arguents passed to the failure module's `init/1`
       """
-  def child_spec(pool_name, worker_module, worker_opts, pool_opts \\ []) do
+  def child_spec(pool_name, worker_module, worker_args, pool_opts \\ []) do
     id = Module.concat([Honeydew, Supervisor, worker_module, pool_name])
 
-    Supervisor.Spec.supervisor(Honeydew.Supervisor, [pool_name, worker_module, worker_opts, pool_opts], id: id)
+    Supervisor.Spec.supervisor(Honeydew.Supervisor, [pool_name, worker_module, worker_args, pool_opts], id: id)
   end
 
 
